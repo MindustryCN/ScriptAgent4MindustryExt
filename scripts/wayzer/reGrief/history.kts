@@ -85,14 +85,15 @@ fun log(x: Int, y: Int, log: Log) {
     }
 }
 listen<EventType.BlockBuildEndEvent> {
-    val player = it.unit.player
+    val player = it.unit?.player ?: return@listen
     if (it.breaking)
         log(it.tile.x.toInt(), it.tile.y.toInt(), Log.Break(player?.uuid()))
     else
         log(it.tile.x.toInt(), it.tile.y.toInt(), Log.Place(player?.uuid(), it.tile.block()))
 }
 listen<EventType.ConfigEvent> {
-    log(it.tile.tileX(), it.tile.tileY(), Log.Config(it.player?.uuid(), it.value?.toString() ?: "null"))
+    val log = Log.Config(it.player?.uuid(), it.value?.toString() ?: "null")
+    log(it.tile.tileX(), it.tile.tileY(), log)
 }
 listen<EventType.DepositEvent> {
     log(it.tile.tileX(), it.tile.tileY(), Log.Deposit(it.player?.uuid(), it.item, it.amount))
@@ -139,9 +140,11 @@ command("history", "开关查询模式") {
     usage = "[core(查询核心)]"
     aliases = listOf("历史")
     body {
-        if (arg.getOrElse(0) { "" }.contains("core")) returnReply(
-            "[green]核心破坏周边情况:\n{list:\n}".with("list" to lastCoreLog)
-        )
+        when (arg.getOrElse(0) { "" }) {
+            "core" -> returnReply(
+                "[green]核心破坏周边情况:\n{list:\n}".with("list" to lastCoreLog)
+            )
+        }
         if (player == null) returnReply("[red]控制台仅可查询核心破坏记录".with())
         if (player!!.uuid() in enabledPlayer) {
             enabledPlayer.remove(player!!.uuid())
@@ -163,13 +166,12 @@ listen<EventType.TapEvent> {
 // 自动保留破坏核心的可疑行为
 var lastCoreLog = emptyList<PlaceHoldString>()
 var lastTime = 0L
-val dangerBlock by useContents {
-    arrayOf(
-        Blocks.thoriumReactor,
-        Blocks.liquidTank, Blocks.liquidRouter, Blocks.bridgeConduit, Blocks.phaseConduit,
-        Blocks.conduit, Blocks.platedConduit, Blocks.pulseConduit
-    )
-}
+val dangerBlock = arrayOf(
+    Blocks.thoriumReactor,
+    Blocks.liquidTank, Blocks.liquidRouter, Blocks.bridgeConduit, Blocks.phaseConduit,
+    Blocks.conduit, Blocks.platedConduit, Blocks.pulseConduit
+)
+
 listen<EventType.BlockDestroyEvent> { event ->
     if (event.tile.block() is CoreBlock) {
         if (System.currentTimeMillis() - lastTime > 5000) { //防止核心连环爆炸,仅记录第一个被炸核心

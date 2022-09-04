@@ -1,9 +1,8 @@
-@file:Import("@wayzer/user/ban.dao.kt", sourceFile = true)
-
 package wayzer.user
 
 import coreLibrary.DBApi.DB.registerTable
 import mindustry.gen.Groups
+import org.jetbrains.exposed.sql.transactions.transaction
 import java.text.DateFormat
 import java.time.Duration
 import java.time.Instant
@@ -28,8 +27,8 @@ fun Player.kick(profile: PlayerProfile, ban: PlayerBan) {
 listen<EventType.PlayerConnect> {
     val profile = PlayerData.findById(it.player.uuid())?.profile ?: return@listen
     launch(Dispatchers.IO) {
-        val ban = PlayerBan.findNotEnd(profile.id) ?: return@launch
-        launch(Dispatchers.game) {
+        val ban = transaction { PlayerBan.findNotEnd(profile.id) } ?: return@launch
+        withContext(Dispatchers.game) {
             it.player.kick(profile, ban)
         }
     }
@@ -43,10 +42,16 @@ fun ban(uuid: String, time: Int, reason: String, operate: PlayerProfile?): Playe
             broadcast("[red] 管理员禁封了{target.name},原因: [yellow]{reason}".with("target" to it, "reason" to reason))
         }
     } else {
-        val ban = PlayerBan.create(profile, Duration.ofMinutes(time.toLong()), reason, operate)
-        Groups.player.find { it.uuid() == uuid }?.let {
-            it.kick(profile, ban)
-            broadcast("[red] 管理员禁封了{target.name},原因: [yellow]{reason}".with("target" to it, "reason" to reason))
+        launch(Dispatchers.IO) {
+            val ban = transaction {
+                PlayerBan.create(profile, Duration.ofMinutes(time.toLong()), reason, operate)
+            }
+            withContext(Dispatchers.game) {
+                Groups.player.find { it.uuid() == uuid }?.let {
+                    it.kick(profile, ban)
+                    broadcast("[red] 管理员禁封了{target.name},原因: [yellow]{reason}".with("target" to it, "reason" to reason))
+                }
+            }
         }
     }
     return profile

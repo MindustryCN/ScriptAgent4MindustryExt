@@ -3,19 +3,19 @@ package wayzer
 import arc.util.Strings
 import cf.wayzer.placehold.DynamicVar
 import coreLibrary.DBApi
+import coreLibrary.lib.util.loop
 import mindustry.gen.Groups
 import mindustry.net.Administration
 import mindustry.net.Packets
+import mindustry.net.Packets.ConnectPacket
 import org.jetbrains.exposed.sql.transactions.transaction
-import wayzer.lib.event.PlayerJoin
+import wayzer.lib.dao.util.TransactionHelper
+import wayzer.lib.event.ConnectAsyncEvent
 import java.time.Duration
 import java.util.*
 
 name = "基础: 玩家数据"
 
-data class moneyData(
-    var money: Int = 0,
-)
 
 registerVarForType<Player>().apply {
     registerChild("ext", "模块扩展数据", DynamicVar.obj { PlayerData[it.uuid()] })
@@ -43,12 +43,6 @@ registerVarForType<PlayerProfile>().apply {
     registerChild("onlineTime", "总在线时间", DynamicVar.obj { Duration.ofSeconds(it.totalTime.toLong()) })
     registerChild("registerTime", "注册时间", DynamicVar.obj { Date.from(it.registerTime) })
     registerChild("lastTime", "账号最后登录时间", DynamicVar.obj { Date.from(it.lastTime) })
-    
-    //registerChild("money", "金币", DynamicVar.obj { it.money })
-}
-
-registerVarForType<moneyData>().apply {
-    registerChild("money", "金币数量", DynamicVar.obj { it.money })
 }
 
 fun Player.updateName() {
@@ -58,49 +52,68 @@ fun Player.updateName() {
     ).toString()
 }
 
+listenPacket2ServerAsync<ConnectPacket> { con, packet ->
+    if (Groups.player.any { pp -> pp.uuid() == packet.uuid }) {
+        con.kick(Packets.KickReason.idInUse)
+        return@listenPacket2ServerAsync false
+    }
+    if (Strings.stripColors(packet.name).length > 24) {
+        con.kick("Name is too long")
+        return@listenPacket2ServerAsync false
+    }
+    val old = transaction { PlayerData.findById(packet.uuid) }
+    val event = ConnectAsyncEvent(con, packet, old).emitAsync {
+        if (it != Event.Priority.NormalE) return@emitAsync
+        withContext(Dispatchers.IO) {
+            data = transaction {
+                PlayerData.findOrCreate(packet.uuid, con.address, packet.name).apply {
+                    refresh(flush = true)
+                    profile//warm up cache
+                }
+            }
+        }
+    }
+    if (event.cancelled) con.kick("[red]拒绝入服: ${event.reason}")
+    !event.cancelled
+}
 
 listen<EventType.PlayerConnect> {
     val p = it.player
-    if (Groups.player.any { pp -> pp.uuid() == p.uuid() }) return@listen p.con.kick(Packets.KickReason.idInUse)
-    if (Strings.stripColors(it.player.name).length > 24) return@listen p.con.kick("Name is too long")
-
-    val event = PlayerJoin(p, PlayerData.findById(p.uuid())).emit()
-    if (event.cancelled) return@listen p.kick("[red]拒绝入服: ${event.reason}")
-
-    val data = PlayerData.findOrCreate(p)
-    if (data.player != null) return@listen p.kick("[red]你已经在服务器中了")
+    val data = PlayerData[p.uuid()]
     data.realName = p.name
     p.updateName()
 }
 
 listen<EventType.PlayerJoin> {
-    transaction { PlayerData[it.player.uuid()].onJoin(it.player) }
+    TransactionHelper.withAsyncFlush(this) {
+        PlayerData[it.player.uuid()].onJoin(it.player)
+    }
 }
 
 listen<EventType.PlayerLeave> {
-    transaction { PlayerData[it.player.uuid()].onQuit(it.player) }
+    TransactionHelper.withAsyncFlush(this) {
+        PlayerData[it.player.uuid()].onQuit(it.player)
+    }
 }
 
 onEnable {
     launch {
         DBApi.DB.awaitInit()
-        Groups.player.toList().forEach {
-            transaction { PlayerData[it.uuid()].onJoin(it) }
-        }
-        launch(Dispatchers.IO) {
-            while (true) {
-                delay(5000)
-                val online = Groups.player.mapNotNull { PlayerData[it.uuid()].secureProfile(it) }
-                transaction {
-                    online.forEach(PlayerProfile::loopCheck)
-                }
+        TransactionHelper.withAsyncFlush(this) {
+            Groups.player.toList().forEach {
+                PlayerData[it.uuid()].onJoin(it)
             }
         }
-        launch(Dispatchers.game) {
-            while (true) {
-                delay(5000)
-                Groups.player.forEach { it.updateName() }
+        loop(Dispatchers.IO) {
+            delay(5000)
+            val online = Groups.player.mapNotNull { PlayerData[it.uuid()].secureProfile(it) }
+            transaction {
+                online.forEach(PlayerProfile::loopCheck)
             }
+        }
+        loop(Dispatchers.game) {
+            delay(5000)
+            Groups.player.forEach { it.updateName() }
         }
     }
 }

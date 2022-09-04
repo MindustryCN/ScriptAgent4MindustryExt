@@ -5,6 +5,7 @@ package wayzer.user.ext
 
 import cf.wayzer.placehold.DynamicVar
 import cf.wayzer.placehold.PlaceHoldApi
+import coreLibrary.lib.util.loop
 import mindustry.game.Gamemode
 import mindustry.game.Team
 import mindustry.gen.Groups
@@ -22,7 +23,6 @@ data class StatisticsData(
     var idleTime: Int = 0,
     var buildScore: Float = 0f,
     var breakBlock: Int = 0,
-    var money: Int = 0,
     @Transient var pvpTeam: Team = Team.sharded
 ) : Serializable {
     val win get() = state.rules.pvp && pvpTeam == teamWin
@@ -30,11 +30,11 @@ data class StatisticsData(
     //加权比分
     val score
         get() = playedTime - 0.8 * idleTime +
-                0.85 * min(buildScore, 0.8f * playedTime) +
-                if (win) 1400 * (1 - idleTime / playedTime) else 0
+                0.6 * min(buildScore, 0.75f * playedTime) +
+                if (win) 600 * (1 - idleTime / playedTime) else 0
 
     //结算经验计算
-    val exp get() = min(ceil(score * 12 / 800 * rate).toInt(), (100 * rate).toInt())//3600点积分为15,40封顶
+    val exp get() = min(ceil(score * 15 / 3600 * rate).toInt(), (60 * rate).toInt())//3600点积分为15,40封顶
 
     companion object {
         lateinit var teamWin: Team
@@ -73,7 +73,6 @@ registerVarForType<StatisticsData>().apply {
     }
     registerChild("score", "综合得分", DynamicVar.obj { it.score })
     registerChild("breakBlock", "破坏方块数", DynamicVar.obj { it.breakBlock })
-    registerChild("money", "金币", DynamicVar.obj { it.money })
 }
 registerVarForType<Player>().apply {
     registerChild("statistics", "游戏统计数据", DynamicVar.obj { it.data })
@@ -98,21 +97,19 @@ listen<EventType.PlayEvent> {
 }
 
 onEnable {
-    launch {
-        while (true) {
-            delay(1000)
-            runCatching {
-                Groups.player.forEach {
-                    it.data.playedTime++
-                    if (it.dead() || !it.active)
-                        it.data.idleTime++
-                }
+    loop {
+        delay(1000)
+        runCatching {
+            Groups.player.forEach {
+                it.data.playedTime++
+                if (it.dead() || !it.active)
+                    it.data.idleTime++
             }
         }
     }
 }
 listen<EventType.BlockBuildEndEvent> {
-    it.unit.player?.data?.apply {
+    it.unit?.player?.data?.apply {
         if (it.breaking)
             breakBlock++
         else
@@ -170,8 +167,10 @@ fun onGameOver(winner: Team) {
             if (key == null || value.isEmpty()) return@forEach
             map[key] = value.maxByOrNull { it.second.score }!!.second
         }
-        map.forEach { (profile, data) ->
-            userService.updateExp(profile, data.exp, "游戏结算")
+        launch(Dispatchers.IO) {
+            map.forEach { (profile, data) ->
+                userService.updateExp(profile, data.exp, "游戏结算")
+            }
         }
         depends("wayzer/user/ext/rank")
             ?.import<(Map<PlayerProfile, Pair<Int, Boolean>>) -> Unit>("onGameOver")
@@ -180,6 +179,6 @@ fun onGameOver(winner: Team) {
     statisticsData.clear()
 }
 export(::onGameOver)//Need in Dispatchers.game
-listenTo<MapChangeEvent>(1) {
+listenTo<MapChangeEvent>(Event.Priority.Before) {
     onGameOver(Team.derelict)
 }

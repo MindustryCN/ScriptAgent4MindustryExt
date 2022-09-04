@@ -46,6 +46,7 @@ fun VoteService.register() {
                 returnReply("[red]队伍已输,无需投降".with())
 
             canVote = canVote.let { default -> { default(it) && it.team() == team } }
+            requireNum = { allCanVote().size }
             start(player!!, "投降({team.colorizeName}[yellow]队|需要全队同意)".with("player" to player!!, "team" to team)) {
                 state.teams.get(team).cores.forEach { Time.run(Random.nextFloat() * 60 * 3, it::kill) }
             }
@@ -99,18 +100,15 @@ fun VoteService.register() {
             )
         }
     }
-/*
     addSubVote("清理本队建筑记录", "", "clear", "清理", "清理记录") {
         val team = player!!.team()
 
         canVote = canVote.let { default -> { default(it) && it.team() == team } }
         requireNum = { ceil(allCanVote().size * 2.0 / 5).toInt() }
         start(player!!, "清理建筑记录({team.colorizeName}[yellow]队|需要2/5同意)".with("team" to team)) {
-            team.data().blocks.clear()
+            team.data().plans.clear()
         }
     }
-
- */
     addSubVote("自定义投票", "<内容>", "text", "文本", "t") {
         if (arg.isEmpty()) returnReply("[red]请输入投票内容".with())
         start(player!!, "自定义([green]{text}[yellow])".with("text" to arg.joinToString(" "))) {}

@@ -3,6 +3,7 @@
 package wayzer.user.ext
 
 import coreLibrary.DBApi.DB.registerTable
+import coreLibrary.lib.util.loop
 import mindustry.gen.Groups
 import org.jetbrains.exposed.sql.Column
 import org.jetbrains.exposed.sql.transactions.TransactionManager
@@ -22,7 +23,7 @@ fun onGameOver(data: Map<PlayerProfile, Pair<Int, Boolean>>) {
         state.rules.waveTimer -> state.wave > winWave
         else -> false
     }
-    transaction {
+    launch(Dispatchers.IO) {
         data.forEach { (p, d) ->
             if (d.first > 1200) {
                 RankData.update({ RankData.id eq p.id.value }) {
@@ -84,13 +85,11 @@ command("rank", "查看排行榜") {
 }
 
 onEnable {
-    launch {
-        while (true) {
-            delay(5000L)
-            if (displayInMap) {
-                Groups.player.forEach {
-                    it.showRankAll(true)
-                }
+    loop {
+        delay(5000L)
+        if (displayInMap) {
+            Groups.player.forEach {
+                it.showRankAll(true)
             }
         }
     }
